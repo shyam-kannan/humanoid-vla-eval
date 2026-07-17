@@ -12,5 +12,8 @@ Target venue: IEEE Humanoids 2026.
 
 ## Status
 
-Research and dataset/model selection in progress. See project issues and commit history
-for current phase.
+Phase 2 (environment setup) in progress. Selected stack: GR00T N1.7 (action/System1,
+`EmbodimentTag.REAL_G1`), Cosmos-Reason2-2B (reasoning proxy/System2), and
+`nvidia/PhysicalAI-Robotics-GR00T-Teleop-G1` (real Unitree G1 teleop trajectories) as the
+primary dataset. See `notebooks/01_environment_setup.ipynb` and commit history for
+details, including why AgiBot World was dropped in favor of this dataset.
