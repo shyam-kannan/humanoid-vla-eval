@@ -156,16 +156,42 @@ trajectory:
 "Minor deviation" execution results are tracked separately (not folded into match or
 failure) so we can report a graded picture, not just a binary pass rate.
 
+**"Unscored"** is a fifth, distinct outcome — not a fifth cell in the table above. It
+means there wasn't enough comparable data to judge the phase at all (e.g. zero
+overlapping frames between the predicted chunk and the actual recording), and must never
+be silently treated as a failure. An earlier version of the classification code did not
+check for this and would fold "not measured" into "compounding failure" or "intent lost
+in handoff" — fixed; see the manual-spot-check note in Section 6.
+
 ## 6. Manual-review triggers (not auto-scored)
 
 Flag for human review rather than auto-tagging when:
 - A reasoning step is "under-specified" (Section 3) or "hallucinated" and we can't
   verify grounding from the frame without a person looking at it.
-- Any body-part group's execution score is "minor deviation" for 3 of the 4 groups
-  simultaneously (ambiguous overall trajectory, not clearly a clean match or failure).
+- Any body-part group's execution score is "minor deviation" for most of the groups that
+  drive the phase-level verdict (Section 4.5's active-side groups: arm, hand, wrist
+  position, wrist rotation, waist) — ambiguous overall trajectory, not clearly a clean
+  match or failure. Implemented as 75% of those groups being minor-deviation-tier, which
+  for the standard 4-way conceptual grouping this rubric originally described (wrist
+  position, wrist rotation, joint angles, hands) works out to the same "3 of 4" the text
+  above once said — the code's actual group breakdown is more granular (arm and waist
+  scored separately, wrist position/rotation scored separately), so the percentage is the
+  more accurate description now.
+- A phase is compared against fewer than 3 overlapping predicted/actual timesteps
+  (typically `retreat`, near the very end of a short episode) — too little data for a
+  match/minor-deviation/failure verdict to mean anything. Distinct from the segmentation
+  trigger below: this is about too few *frames*, not a bad grasp/release split.
 - The derived ground-truth sub-goal segmentation (Section 2) produces phases that don't
   sum to a plausible fraction of the episode length (signals a bad grasp/release
   detection, not a real model failure).
+
+**Video/state frame alignment.** The reach observation point is always frame 0 (no
+seek needed); transport and retreat start mid-episode, where a naive video-frame seek
+(`cv2`'s `CAP_PROP_POS_FRAMES`) can land on the nearest keyframe rather than the exact
+requested frame for H.264-encoded video, desyncing the video GR00T sees from the state
+row pulled at the same index. Fixed by reading and discarding frames sequentially up to
+the start frame instead of seeking directly — guaranteed frame-exact, and cheap given how
+short these episodes are (~100 frames).
 
 ## 7. Explicitly out of scope here
 
