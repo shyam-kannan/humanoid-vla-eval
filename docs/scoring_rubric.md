@@ -127,6 +127,22 @@ Derive a grasp state (open / transitioning / closed) from the mean hand-joint ma
 using the same threshold-fitting approach as Section 2. Match if predicted and actual
 fall in the same state bucket at each compared frame.
 
+### 4.5 Combining body-part groups into one phase-level verdict
+
+**Revised after the first automated pass** (see project notes) — the original rule was
+"the phase fails if any single body-part group fails." Run against real data, that rule
+produced a near-uniform failure verdict across every episode and phase: this task is
+single-handed, so the arm/hand *not* doing the grasping isn't commanded to go anywhere in
+particular, and its natural noisy drift was consistently failure-tier — which then
+poisoned the verdict for phases where the actually task-relevant arm/hand tracked well.
+
+The phase-level verdict is now driven only by the **active side** (the arm, hand, and
+wrist_eef of whichever hand `active_hand` — Section 2 — identifies as the grasping hand)
+plus the **waist** (shared by both arms' reach). The idle side's per-group scores are
+still computed and logged in full, just excluded from the match/minor-deviation/failure
+roll-up. If a future task genuinely requires both hands, this assumption needs revisiting
+before running this rubric on it.
+
 ## 5. The core classification (the actual research output)
 
 Cross-reference Section 3 (reasoning) and Section 4 (execution) per sub-goal phase, per
