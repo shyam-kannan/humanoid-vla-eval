@@ -181,6 +181,12 @@ in handoff" — fixed; see the manual-spot-check note in Section 6.
 
 ## 6. Manual-review triggers (not auto-scored)
 
+**Two of these triggers are episode-wide (apply to every phase in the episode); two are
+phase-specific (apply only to the phase that triggered them).** An earlier version of the
+CSV output applied every reason in an episode's list to every one of that episode's phase
+rows, which made a clean `reach` phase look flagged just because `transport` in the same
+episode genuinely was — fixed; the "needs review" column is now computed per phase.
+
 Flag for human review rather than auto-tagging when:
 - A reasoning step is "under-specified" (Section 3) or "hallucinated" and we can't
   verify grounding from the frame without a person looking at it.
