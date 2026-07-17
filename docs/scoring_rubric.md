@@ -70,9 +70,25 @@ the correct relative order, referencing the correct named object and target.
 ## 4. Execution-stage (System 1) scoring
 
 Compared per body-part group, since different joints have different natural precision.
-The **comparison unit** is GR00T's full predicted action chunk against the actual
-recorded frames following the same observation (not just the first predicted step,
-which Section 3 only used for the one-off manual check).
+
+**Comparison unit — revised after inspecting real per-timestep data.** GR00T's full
+predicted action chunk (~40 steps) is compared against the actual recorded frames
+following the same observation, but the match/minor-deviation/failure verdict is scored
+on only the **first `EARLY_HORIZON_STEPS` (10) steps**, not the full chunk. Checking
+*signed* (not just absolute) per-joint error on real data showed two different things
+mixed together in a full-chunk average: some joints start near-zero error and grow
+steadily over the 40-step horizon — normal open-loop drift, not evidence the plan wasn't
+followed, and expected for any policy evaluated this way, since deployment normally
+re-plans every few steps rather than running open-loop for the whole chunk — while others
+show a near-constant offset present even at step 0, a more direct signal about whether
+the immediate predicted action reflects the plan. Averaging the whole chunk let ordinary
+drift alone push a joint's mean past the failure threshold even when the first several
+steps were accurate, which is what produced a uniform 100%-failure result across an
+early pass at 15 real episodes before this fix.
+
+The full 40-step numbers are still computed and reported (`full_horizon_groups` in the
+notebook's output) for a secondary drift analysis — just not used to drive the
+classification.
 
 ### 4.1 Wrist position (from `wrist_eef_9d`, first 3 dims)
 
