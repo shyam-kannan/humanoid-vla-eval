@@ -1,67 +1,64 @@
-# Handoff Notes — 2026-07-17 session
+# Where things stand — 2026-07-17
 
-**TL;DR:** Phase 2 (environment setup) is done — the full pipeline runs end-to-end on
-Colab Pro. Phase 3 (manual smoke test) is in progress. Pick up by running the notebook
-from the top (or resuming mid-way via checkpoint) and continuing the manual comparison
-in Section 9.
+## What we did
 
-## What changed this session
+We got the two AI models talking to real robot data and to each other, and confirmed
+they both produce sensible output on a real example.
 
-Started from nothing (no repo) and got to a working GR00T + Cosmos-Reason2 + real G1
-data pipeline. Notable technical decisions/fixes, in order:
+Here's the flow in plain terms:
 
-1. **Dataset pivot:** originally planned around AgiBot World, but discovered GR00T has
-   no zero-shot embodiment tag for it (would've needed fine-tuning, which we're not
-   doing). Switched to `nvidia/PhysicalAI-Robotics-GR00T-Teleop-G1` — real Unitree G1
-   teleop data, matches GR00T's actual `REAL_G1` zero-shot tag.
-2. **`REAL_G1` needs a `wrist_eef_9d` state field the raw dataset doesn't have** (only
-   raw joint angles are recorded — no public G1 dataset provides this, including
-   NVIDIA's own). Added a forward-kinematics step using the official Unitree G1 URDF
-   (`unitreerobotics/unitree_ros`) + `pytorch_kinematics` to compute it. Sanity-checked
-   (plausible ~0.3m arm reach, finite values) but flagged everywhere as an
-   **approximation**, not verified against NVIDIA's internal convention.
-3. **Fixed a handful of wrong API assumptions** against the real GR00T/Cosmos-Reason2
-   source (import paths, constructor signatures, the Cosmos-Reason2 model class,
-   chat-template input format, and a hardcoded language observation key that turned out
-   to be dataset-specific, not a fixed literal).
-4. **Fixed a nasty numpy install issue on Colab**: gr00t pins `numpy==1.26.4`, Colab
-   ships numpy 2.x by default. An in-place downgrade leaves a corrupted mixed install
-   (numpy 2.0 renamed an internal directory). Worse, once numpy's compiled extension is
-   loaded once in a running kernel, it can't be safely reloaded in-process — a genuine
-   restart is sometimes unavoidable. The install cell now detects this specific failure
-   mode and tells you plainly when a restart is needed, instead of pretending to fix it
-   live.
-5. Built Section 9 (Phase 3): compares GR00T's predicted first action step against what
-   the human teleoperator actually did next in the same recorded episode.
+1. **Picked the data.** We needed real recordings of a humanoid robot (Unitree G1)
+   doing tasks — a human remote-controlling the robot, with everything the robot's
+   joints did saved, plus video and a text description of the task ("pick up the red
+   apple and place it on the plate"). Our first choice of dataset turned out not to be
+   compatible with the "doing" AI — it would've needed extra training to understand
+   that robot's specific movements, which our compute budget doesn't allow. Switched to
+   a different real-robot dataset that works without any extra training.
 
-## Current state
+2. **Hit a gap and filled it.** The "doing" AI expects to know exactly where the
+   robot's hand is in 3D space. The recordings only tell us how bent each joint is
+   (shoulder, elbow, wrist), not where the hand ends up. So we calculated it ourselves —
+   basic geometry, using the robot's exact body measurements (like knowing exactly how
+   long someone's forearm and upper arm are, you can calculate where their hand is if
+   you know how bent their elbow and shoulder are). We checked the numbers came out
+   sensible (roughly arm's-length from the body, not some impossible position).
 
-- Notebook: `notebooks/01_environment_setup.ipynb`
-- Confirmed working end-to-end: GR00T N1.7 load → Cosmos-Reason2 load → dataset
-  download/parse → FK sanity check → full observation build → `get_action()` →
-  Cosmos-Reason2 reasoning trace. All produced sensible output on episode 0 of
-  `g1-pick-apple` ("Pick up the red apple and place it on the plate").
-- Section 9 (predicted-vs-actual comparison) was just added — **not yet run**. That's
-  the next thing to execute.
-- Checkpointing to Drive works (`checkpoints/phase2_status.json`) — re-running the
-  notebook from the top skips anything already done.
+3. **Got both AIs running and talking to the data.** One AI acts like the "thinking"
+   part — given a task and a picture, it writes out the steps it would take. The other
+   acts like the "doing" part — given the same task and the robot's current pose, it
+   predicts what the robot's joints should do next. Both are now working: we fed them
+   one real example (pick up the apple, put it on the plate) and both gave sensible
+   answers. The thinking AI wrote out a reasonable step-by-step plan. The doing AI
+   predicted a plausible arm movement.
 
-## How to pick up
+4. **Worked through a bunch of setup friction.** Getting everything installed and
+   talking to each other correctly on Google Colab took a lot of trial and error —
+   wrong assumptions about how to call these models, a nasty software conflict during
+   installation, that sort of thing. All resolved now; the setup should run smoothly
+   for anyone starting fresh.
 
-1. Open the notebook fresh in Colab (GPU runtime, ideally High-RAM/80GB A100 — Cosmos-
-   Reason2 alone needs ~24GB minimum, GR00T ~16GB, and they're loaded simultaneously).
-2. Run top to bottom. Everything through Section 8 (status summary) is confirmed
-   working. Section 9 is new — run it and manually check: does the reasoning trace make
-   sense for the task, and is the predicted action in a plausible direction relative to
-   the actual recorded action?
-3. If you hit the numpy restart message: just restart the runtime once and re-run — the
-   on-disk fix is already correct by that point, it's a one-time thing.
-4. After Section 9 looks reasonable, Phase 3 is done → move to Phase 4 (formal
-   match/failure scoring definitions, written before running at scale).
+## Where we are right now
 
-## Known approximations to keep flagged in any output/writeup
+We just added a check that compares what the "doing" AI predicted against what the
+human actually did when controlling the robot for that same example — to see, by eye,
+how close the prediction is. That comparison is written but hasn't been run yet.
 
-- Cosmos-Reason2's reasoning output is a **proxy** for GR00T's actual (inaccessible,
-  latent) internal reasoning — not the literal internal state.
-- `wrist_eef_9d` values are **forward-kinematics approximations**, not recorded ground
-  truth or verified against NVIDIA's internal convention.
+## What's next
+
+1. Run that comparison and look at it together — does the predicted movement roughly
+   match what the human did? Does the AI's step-by-step plan make sense?
+2. Once that looks reasonable, we write down clear, concrete rules for what counts as
+   "the AI got it right" vs "the AI messed up" — before running this on a lot of
+   examples, so we're not making up the rules after seeing the results.
+3. Then scale up: run this across many examples automatically, spot-check a chunk of
+   them by hand, and build the final chart/table showing where and how these AIs tend
+   to lose the thread between "figuring out what to do" and "actually doing it."
+
+## Two things worth remembering
+
+- The "thinking" AI we're using isn't literally part of the "doing" AI — it's a
+  reasonable stand-in, because we can't actually see the doing AI's internal
+  reasoning directly. Good enough to use, but not the exact same thing.
+- The hand-position numbers we calculated ourselves (step 2 above) are our best
+  estimate from geometry, not something the robot itself measured. Reasonable, but an
+  approximation we should keep flagging, not treat as ground truth.
