@@ -47,33 +47,28 @@ Since the last update, two things happened:
    and how to combine the "thinking" AI's plan with the "doing" AI's movements into one
    verdict per example. Written down before running at scale, on purpose, so we're not
    inventing the rules after seeing which way the results lean.
-2. We built the actual automatic scoring system that applies those rules. It's in two
-   pieces:
-   - A piece that runs on the robot-data side (still needs a GPU, so it runs on Colab
-     like everything else): it plays out a task, watches for the moment the robot's hand
-     closes around the object and the moment it lets go, and uses those two moments to
-     split the task into three parts — reach, carry, and let-go. Then it asks both AIs
-     what they'd do at the start of each of those three parts, and writes down what they
-     predicted next to what the human actually did.
-   - A piece that runs on a regular computer, no GPU needed: it reads what the first
-     piece recorded and applies the rules from step 1 — was the movement close enough,
-     was the plan sensible and in the right order — and produces a table showing, for
-     each of those three parts of each example, whether the two AIs succeeded together,
-     failed together, or (the case we care about most) the plan was right but the
-     movement wasn't — meaning the intent got lost somewhere between "deciding what to
-     do" and "actually doing it."
+2. We built the actual automatic scoring system that applies those rules, as one
+   notebook that runs start to finish on Colab: it plays out a task, watches for the
+   moment the robot's hand closes around the object and the moment it lets go, and uses
+   those two moments to split the task into three parts — reach, carry, and let-go. Then
+   it asks both AIs what they'd do at the start of each of those three parts, writes down
+   what they predicted next to what the human actually did, and applies the rules from
+   step 1 — was the movement close enough, was the plan sensible and in the right order —
+   to produce a table showing, for each of those three parts of each example, whether the
+   two AIs succeeded together, failed together, or (the case we care about most) the plan
+   was right but the movement wasn't — meaning the intent got lost somewhere between
+   "deciding what to do" and "actually doing it."
 
-The first piece hasn't been run yet — it needs a live Colab session with a GPU, same as
-everything else so far. The second piece has been tested with made-up example data and
-the math checks out, but hasn't seen real output yet either.
+It hasn't been run yet — it needs a live Colab session with a GPU, same as everything
+else so far. The scoring math inside it has been tested with made-up example data and
+checks out, but hasn't seen real output yet either.
 
 ## What's next
 
-1. Run the data-collection piece on Colab across a batch of examples.
-2. Feed that output into the scoring piece and look at the resulting table together —
-   does the automatic scoring line up with what a person would say looking at the same
-   examples?
-3. If it looks reasonable, scale up further: run this across many more examples, spot-
+1. Run the notebook on Colab across a batch of examples and look at the resulting table
+   together — does the automatic scoring line up with what a person would say looking at
+   the same examples?
+2. If it looks reasonable, scale up further: run this across many more examples, spot-
    check a chunk of them by hand, and build the final chart/table for the paper showing
    where and how these AIs tend to lose the thread between "figuring out what to do" and
    "actually doing it."
