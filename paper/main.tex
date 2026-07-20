@@ -1,0 +1,486 @@
+\documentclass[conference]{IEEEtran}
+\IEEEoverridecommandlockouts
+
+\usepackage{cite}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{url}
+
+\def\BibTeX{{\rm B\kern-.05em{\sc i\kern-.025em b}\kern-.08em
+    T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
+
+\begin{document}
+
+\title{Where Does Intent Get Lost? An Offline Trajectory-Matching Analysis of\\
+Reasoning-to-Action Handoff Failures in a Humanoid VLA}
+
+% Double-anonymous: no author names/affiliations in the submitted version.
+% Fill in the real author block below only for the camera-ready version.
+\author{
+\IEEEauthorblockN{Anonymous Author(s)}
+\IEEEauthorblockA{Submission for double-anonymous review}
+}
+% \author{
+% \IEEEauthorblockN{First Author\IEEEauthorrefmark{1}, Second Author\IEEEauthorrefmark{1}}
+% \IEEEauthorblockA{\IEEEauthorrefmark{1}Affiliation, City, Country \\ email@example.com}
+% }
+
+\maketitle
+
+\begin{abstract}
+Vision-Language-Action (VLA) models for humanoid manipulation typically decompose into a
+high-level reasoning stage that plans a sequence of sub-goals and a low-level action stage
+that executes continuous joint-space trajectories. Failures in these systems are often
+attributed vaguely to ``the model,'' without distinguishing whether the plan itself was
+wrong or whether a correct plan failed to survive the handoff into execution. We present
+an offline evaluation methodology that scores these two stages independently against real
+teleoperated demonstrations and cross-references them into a joint classification,
+isolating the specific failure mode of \emph{intent lost in handoff}: a correct plan whose
+execution diverges from the demonstrated trajectory. Applied to GR00T N1.7 (zero-shot on a
+real Unitree G1 teleop dataset) with Cosmos-Reason2-2B as a reasoning-stage proxy, across
+50 pick-and-place episodes (150 sub-goal-phase observations) we find that 68.0\% of phase
+observations show intent lost in handoff versus only 3.3\% where both stages fail
+together, with failure concentrated in continuous joint control (arm, wrist, or torso
+deviates from the tightest tolerance in 100\% of observations) rather than discrete
+grasp-state prediction (deviates in only 18.7\%), and rising monotonically through the
+task from 58.0\% at the initial reach to 74.0\% by the final retreat. We discuss the
+methodological limits of trajectory-matching against a single demonstration as a proxy
+for task success, and release the scoring pipeline as an open, auditable tool for
+pre-deployment diagnosis of VLA planning-execution failures.
+\end{abstract}
+
+\begin{IEEEkeywords}
+vision-language-action models, humanoid robots, failure analysis, offline evaluation, imitation learning
+\end{IEEEkeywords}
+
+\section{Introduction}
+
+Vision-language-action models increasingly follow a two-stage architecture explicitly
+described by their own authors in dual-process terms: a ``System 2'' component performs
+deliberate, language-mediated reasoning to decompose a task instruction into sub-goals,
+while a ``System 1'' component maps the current observation and sub-goal onto continuous
+low-level actions. GR00T N1~\cite{bjorck2025groot} and $\pi_0$~\cite{black2024pi0} both
+adopt this framing independently, and Embodied Chain-of-Thought~\cite{zawalski2024ecot}
+shows that eliciting an inspectable intermediate reasoning trace, even in an otherwise
+single-stage policy, improves both performance and interpretability. This decomposition
+is attractive for modularity, but it introduces a specific failure surface that
+single-stage, end-to-end policies~\cite{kim2024openvla,brohan2023rt2} do not have by
+construction: the reasoning stage can produce a completely correct plan that the action
+stage nonetheless fails to execute faithfully. We call this failure mode
+\textbf{intent lost in handoff}.
+
+Existing evaluation practice for VLA models typically reports aggregate task success
+rate, which conflates planning failures with execution failures and gives no diagnostic
+signal about \emph{where} in the reasoning-to-action pipeline a given failure originates.
+This is a meaningful gap for humanoid platforms specifically, where whole-body
+coordination (balance, torso posture, bimanual coordination) adds execution-stage failure
+modes beyond what tabletop single-arm manipulation exposes, and where physical
+trial-and-error evaluation is expensive and slow compared to software iteration.
+
+We contribute:
+
+\begin{enumerate}
+\item An offline evaluation methodology that scores reasoning-stage and execution-stage
+  fidelity independently, against ground truth derived directly from real teleoperated
+  demonstrations (no simulation, no physical execution required), and cross-references
+  them into a $2\times2$ classification that isolates intent-lost-in-handoff from cases
+  where both stages fail together or where an incorrect plan is accidentally executed
+  correctly.
+\item A concrete instantiation of this methodology on GR00T N1.7 (NVIDIA's whole-body
+  humanoid VLA policy) evaluated zero-shot against real Unitree G1 teleoperated
+  demonstrations, using Cosmos-Reason2-2B as an explicit, labeled proxy for the reasoning
+  stage GR00T does not expose in human-readable form.
+\item An empirical failure taxonomy across 50 episodes (150 sub-goal-phase observations)
+  showing that execution failures concentrate in continuous joint-space control rather
+  than discrete grasp-state prediction, and that failure rate increases through the
+  course of a pick-and-place task rather than being uniform.
+\item Release of the full scoring pipeline as open, auditable tooling, including the
+  specific numeric thresholds used and the reasoning behind design decisions made after
+  inspecting real per-episode data (e.g., scoring against an early prediction window
+  rather than a full open-loop rollout, to isolate immediate plan-following from
+  accumulated open-loop drift).
+\end{enumerate}
+
+\section{Related Work}
+
+\textbf{VLA models and dual-system architectures.} GR00T N1~\cite{bjorck2025groot}, the
+model we evaluate, explicitly frames itself as a dual-system architecture: a
+vision-language module (its authors' ``System 2'') interpreting instructions and scene,
+coupled to a diffusion-transformer action module (``System 1'') generating continuous
+motor commands. $\pi_0$~\cite{black2024pi0} independently converges on the same framing,
+pairing a discrete-token planning stage with a flow-matching action stage. Not every VLA
+makes this split explicit: OpenVLA~\cite{kim2024openvla} and
+RT-2~\cite{brohan2023rt2} are single-stage policies that map vision and language directly
+to action tokens without a separately inspectable planning representation. This
+distinction matters for our methodology, which requires a model (or a reasonable proxy
+for one) that produces an inspectable plan distinct from its low-level action output; it
+is not directly applicable to single-stage VLAs without first eliciting an analogous
+reasoning trace some other way.
+
+\textbf{Explicit reasoning and chain-of-thought in embodied models.} Embodied
+Chain-of-Thought (ECoT)~\cite{zawalski2024ecot} trains OpenVLA to produce an inspectable
+reasoning trace -- plans, sub-tasks, and grounded features like bounding boxes -- before
+its action head runs, improving both success rate and interpretability. Our approach is
+related but serves a different purpose: ECoT modifies training to make an otherwise
+single-stage model produce visible reasoning as part of improving that same model, while
+we evaluate an already-dual-system, already-trained model's plan-to-action fidelity
+without any additional training, using reasoning and action as independently scored
+diagnostic signals rather than as a joint training target.
+Cosmos-Reason1~\cite{azzolini2025cosmosreason1} -- the predecessor to Cosmos-Reason2-2B,
+which we use as our reasoning-stage proxy (Section~\ref{sec:method}) -- is exactly the
+kind of standalone embodied-reasoning VLM this diagnostic approach depends on: a model
+that shares architectural lineage with GR00T's internal VLM but exposes natural-language
+chain-of-thought output that GR00T's own latent reasoning does not.
+
+\textbf{Failure analysis for robot policies.} RoboFAC~\cite{ye2025robofac} is the closest
+prior work in spirit: a large-scale, failure-centric framework (9{,}440 erroneous
+trajectories, 78{,}623 QA pairs, simulation and real-world) that trains a dedicated model
+to diagnose and correct manipulation failures from trajectory data. It differs from our
+approach in two ways relevant to this paper's contribution: it categorizes failures
+without explicitly cross-referencing an independently-scored plan against
+independently-scored execution the way our $2\times2$ classification does, and it
+requires training a diagnostic model on a large labeled failure dataset, whereas our
+method is a lightweight, threshold-based offline rubric requiring no additional training
+data or model training, specifically designed to isolate the reasoning-to-action handoff
+as its own failure surface.
+
+\textbf{Evaluation methodology beyond success rate.} Kress-Gazit et
+al.~\cite{kressgazit2024empirical} argue that robot learning research over-relies on
+aggregate success rate reported with minimal experimental context, and propose richer
+practices: explicit conditions, multiple complementary metrics, statistical rigor, and
+qualitative failure description -- demonstrated through physical hardware trials. We
+share this motivation but differ in setting: we obtain much of this richer diagnostic
+signal entirely offline against existing demonstration data, directly addressing the cost
+and slowness of physical trial-and-error evaluation that motivates their call for better
+practices in the first place.
+
+\textbf{Humanoid whole-body benchmarks and datasets.}
+HumanoidBench~\cite{sferrazza2024humanoidbench} is a simulated benchmark spanning
+humanoid locomotion and manipulation tasks; Humanoid Everyday~\cite{zhao2025humanoideveryday}
+is a large real-world dataset for diverse humanoid manipulation. Both establish task and
+data infrastructure for humanoid learning broadly; neither proposes a
+reasoning-versus-execution diagnostic methodology, which is the specific gap this paper
+targets. Like Humanoid Everyday, we use real (not simulated) demonstration data, but
+apply it to a narrower diagnostic question -- where a specific model's plan-to-action
+fidelity breaks down -- rather than broad task or skill coverage.
+
+\section{Method}
+\label{sec:method}
+
+\subsection{Dataset}
+
+We use \texttt{nvidia/PhysicalAI-Robotics-GR00T-Teleop-G1}, a public dataset of real (not
+simulated) teleoperated Unitree G1 humanoid trajectories in LeRobot format, sampled at
+20\,fps. We evaluate on the \texttt{g1-pick-apple} task (pick up a red apple, place it on
+a plate). \textit{[TODO: note if additional task folders from this dataset -- pear,
+grapes, starfruit -- are added before submission for cross-task generalization.]} State
+and action are 43-dimensional whole-body vectors (legs, waist, both arms, both hands).
+
+\subsection{Models}
+
+\textbf{Action stage (System 1):} GR00T N1.7 (3B parameters), a later checkpoint of
+NVIDIA's GR00T N1 whole-body humanoid VLA policy~\cite{bjorck2025groot}, loaded zero-shot
+with \texttt{EmbodimentTag.REAL\_G1} -- a pretrain tag matched by construction to this
+dataset's embodiment, requiring no fine-tuning.
+
+\textbf{Reasoning stage (System 2) proxy:} GR00T's own internal reasoning representation
+is latent (hidden-state activations), not human-readable. We use Cosmos-Reason2-2B, a
+vision-language model sharing backbone lineage with GR00T's internal VLM but released
+standalone with natural-language chain-of-thought output, run independently on the same
+task instruction and initial frame. Cosmos-Reason2 is the successor to
+Cosmos-Reason1~\cite{azzolini2025cosmosreason1} and, as of this writing, is documented via
+model card and code release rather than a dedicated paper; we cite the Reason1 paper for
+the underlying architecture and training approach the Reason2 line descends from.
+\textbf{This is an explicit proxy, not GR00T's literal internal state}, and all results
+involving the reasoning stage must be read with this caveat.
+
+\subsection{Ground-truth sub-goal segmentation}
+
+The dataset provides one flat task instruction per episode, not labeled sub-goal
+boundaries. We derive reach / transport / retreat sub-goal boundaries from the recorded
+hand-joint trajectory: a scalar ``hand closure'' signal (mean absolute value of the 7
+hand-joint state dimensions per frame, per hand) is computed for both hands; the hand
+with the larger observed range is taken as the grasping hand for that episode (this is
+computed from ground-truth recorded data, independent of any model prediction). A grasp
+event is the first sustained ($\geq 3$-frame) crossing of a per-episode-fit threshold
+from below to above; a release event is the following sustained reverse crossing. This
+splits each episode into reach (start $\rightarrow$ grasp), transport (grasp
+$\rightarrow$ release), and retreat (release $\rightarrow$ end).
+
+\subsection{Execution-stage scoring}
+
+For each of the three sub-goal phases, GR00T is queried once at that phase's start frame,
+producing a predicted action chunk. This is compared against the actual recorded
+teleoperated action for the same window, per body-part group: wrist position (Euclidean
+distance, cm), wrist rotation (geodesic angle between predicted and actual rotation
+matrices, reconstructed from the 6D continuity representation of Zhou et al.), arm/torso
+joint angles (per-joint degree difference), and hand grasp state (discrete
+open/transitioning/closed bucket match). Table~\ref{tab:thresholds} gives the
+match/minor-deviation/failure thresholds per dimension.
+
+\begin{table}[htbp]
+\centering
+\caption{Execution-stage scoring thresholds}
+\label{tab:thresholds}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+Dimension & Match & Minor deviation & Failure \\
+\midrule
+Wrist position & $<3$\,cm & 3--7\,cm & $>7$\,cm \\
+Wrist rotation & $<10^\circ$ & $10$--$20^\circ$ & $>20^\circ$ \\
+Arm/waist joint angle & $<5^\circ$ & $5$--$15^\circ$ & $>15^\circ$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+A body-part group (e.g., ``left arm,'' 7 joints) is scored \emph{match} if all joints are
+match-tier, \emph{failure} if any single joint is failure-tier, \emph{minor deviation}
+otherwise. Only the arm, hand, wrist, and torso of the \emph{grasping} side (plus the
+shared torso/waist) drive the phase-level verdict; the idle arm's motion is not commanded
+by the task and its prediction error is not evidence of a failed handoff.
+
+Scoring uses only the first 10 predicted steps ($\sim$0.5\,s at this dataset's frame
+rate), not the full $\sim$40-step predicted chunk. Inspecting signed per-joint error on
+real data showed two distinct phenomena conflated by full-chunk averaging: some joints
+show error that grows steadily from near-zero over the open-loop horizon (expected
+behavior for any policy evaluated this way, since deployment normally re-plans every few
+steps rather than executing a long open-loop rollout), while others show a near-constant
+offset present even at the first predicted step (a more direct signal about whether the
+immediate action reflects the plan). We report both windows; the early window drives
+classification.
+
+\subsection{Reasoning-stage scoring}
+
+Cosmos-Reason2's step-by-step plan for the task is evaluated once per episode (it
+produces one plan up front, not a new plan per phase) via LLM-as-judge: does the plan
+cover all three canonical sub-goal phases, in the correct order, naming the correct
+object and target, without hallucinated content or being too vague to map onto the
+phases. We observed some inconsistency in the judge's handling of borderline elaborations
+across calls (Section~\ref{sec:discussion}); this is a known limitation of LLM-as-judge
+approaches generally.
+
+\subsection{Joint classification}
+
+Per phase, we cross-reference reasoning-stage match against execution-stage tier
+(Table~\ref{tab:classification}). ``Minor deviation'' execution results are tracked as a
+separate category rather than folded into match or failure.
+
+\begin{table}[htbp]
+\centering
+\caption{The core reasoning $\times$ execution classification}
+\label{tab:classification}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+ & Execution match & Execution failure \\
+\midrule
+Reasoning match & Success & \textbf{Intent lost in handoff} \\
+Reasoning failure & Accidentally correct & Compounding failure \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Results}
+
+Across 50 episodes (150 sub-goal-phase observations, all with valid grasp/release
+segmentation), Table~\ref{tab:overall} gives the overall classification breakdown and
+Table~\ref{tab:byphase} the breakdown by sub-goal phase.
+
+\begin{table}[htbp]
+\centering
+\caption{Overall classification}
+\label{tab:overall}
+\begin{tabular}{@{}lrr@{}}
+\toprule
+Classification & Count & \% \\
+\midrule
+Intent lost in handoff & 102 & 68.0\% \\
+Minor deviation & 43 & 28.7\% \\
+Compounding failure & 5 & 3.3\% \\
+Success & 0 & 0.0\% \\
+Accidentally correct & 0 & 0.0\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[htbp]
+\centering
+\caption{Classification by sub-goal phase}
+\label{tab:byphase}
+\begin{tabular}{@{}lrrr@{}}
+\toprule
+Phase & Intent lost & Minor dev. & Compounding \\
+\midrule
+Reach & 58.0\% & 42.0\% & 0.0\% \\
+Transport & 72.0\% & 26.0\% & 2.0\% \\
+Retreat & 74.0\% & 18.0\% & 8.0\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Failure rate rises monotonically through the task: the model's execution is closest to
+the demonstrated trajectory immediately after the observation (reach), and diverges
+further as the task progresses through transport into retreat.
+
+Table~\ref{tab:driving} shows which measured dimension most often drives a
+failure/minor-deviation verdict (a phase can implicate more than one dimension).
+Discrete grasp-state prediction (hand open/closed) is reliable; continuous joint-space
+and pose control (arm, wrist, torso) is where deviation concentrates. This suggests the
+model's difficulty is specifically in precise continuous control fidelity, not in
+higher-level object-interaction state tracking.
+
+\begin{table}[htbp]
+\centering
+\caption{Which measured dimension drives failure/minor-deviation (of 150)}
+\label{tab:driving}
+\begin{tabular}{@{}lr@{}}
+\toprule
+Dimension & Count \\
+\midrule
+Waist (torso) rotation & 148 \\
+Arm joint angles & 145 \\
+Wrist position & 145 \\
+Wrist rotation & 100 \\
+Hand grasp state & 28 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Table~\ref{tab:reasoning} gives reasoning-stage failure categories at the episode level.
+The dominant failure pattern is a correct plan with a failed execution
+(\texttt{intent\_lost\_in\_handoff}, 68\% of observations), not a failure of both stages
+together (\texttt{compounding\_failure}, 3.3\%) -- consistent with the reasoning stage
+(or its proxy) being comparatively reliable relative to execution-stage trajectory
+fidelity in this setting. We manually verified all 3 \texttt{compounding\_failure}
+episodes against their raw reasoning traces and execution numbers: in two, the plan never
+described a retreat/withdraw step at all; in the third, the plan described the
+\emph{plate} moving to meet the apple rather than the reverse -- a clear reversal of
+actor and object, not a borderline judge call.
+
+\begin{table}[htbp]
+\centering
+\caption{Reasoning-stage failure categories (episode-level, $n=50$)}
+\label{tab:reasoning}
+\begin{tabular}{@{}lr@{}}
+\toprule
+Category & Episodes \\
+\midrule
+Hallucinated step & 10 (20\%) \\
+Wrong object/target & 9 (18\%) \\
+Missing sub-goal & 5 (10\%) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Table~\ref{tab:matchcount} shows how many of the 5 scored dimensions (arm, hand, wrist
+position, wrist rotation, waist) land in the strictest match tier simultaneously, per
+phase. No phase in our sample achieves the strictest tier on all 5 dimensions
+simultaneously, which explains the 0\% strict-success rate in Table~\ref{tab:overall} --
+but the shape of this distribution is itself informative. If a single overly strict
+threshold were responsible (e.g., the torso-rotation tolerance being unreasonably tight
+relative to what a well-performing model could achieve), we would expect phases to
+cluster near 4/5, with one holdout dimension. Instead the distribution is centered at
+1--2/5 (82\% of phases), with only 4 of 150 phases (2.7\%) reaching 3 or more. This is
+consistent with genuinely independent, non-trivial deviation across multiple
+continuous-control dimensions at once, not an artifact of one miscalibrated cutoff.
+
+\begin{table}[htbp]
+\centering
+\caption{Dimensions matching simultaneously, per phase (of 5)}
+\label{tab:matchcount}
+\begin{tabular}{@{}lrr@{}}
+\toprule
+Dimensions matching & Count & \% \\
+\midrule
+0 of 5 & 23 & 15.3\% \\
+1 of 5 & 75 & 50.0\% \\
+2 of 5 & 48 & 32.0\% \\
+3 of 5 & 3 & 2.0\% \\
+4 of 5 & 1 & 0.7\% \\
+5 of 5 & 0 & 0.0\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% [TODO Task 3: figures -- bar chart of Table~\ref{tab:overall}, stacked bar of
+% Table~\ref{tab:byphase} by phase, bar chart of Table~\ref{tab:matchcount}, example
+% frame sequence for a representative intent-lost-in-handoff case with
+% predicted-vs-actual overlay if time permits]
+
+\section{Discussion and Limitations}
+\label{sec:discussion}
+
+\textbf{Trajectory-matching is not task-success measurement.} This is the central
+methodological caveat of the entire approach and must not be elided: every
+classification here measures divergence from \emph{one recorded human demonstration},
+not whether the predicted trajectory would have physically succeeded at the task. A
+pick-and-place task generally admits multiple valid solution paths; GR00T predicting a
+different-but-valid grasp approach would be scored identically to a genuinely failed
+grasp under this rubric. The zero success rate we observe (Table~\ref{tab:overall})
+should be read as ``GR00T's zero-shot predictions on this embodiment do not closely track
+this specific demonstrated trajectory,'' not as ``GR00T fails to complete this task.''
+Table~\ref{tab:matchcount}'s distribution supports this being a real measurement of
+partial trajectory fidelity rather than a rubric artifact -- most phases achieve 1--2 of
+5 dimensions within the strictest tolerance, not zero, and the shape of the distribution
+is inconsistent with one miscalibrated threshold being solely responsible. Grounding the
+trajectory-fidelity-vs-task-success distinction -- ideally via the physical-consequence
+proxy layer described below -- is the most important piece of future work this result
+motivates.
+
+\textbf{Reasoning-stage proxy.} Cosmos-Reason2-2B is used as an explicit, labeled stand-in
+for GR00T's internal reasoning, which is otherwise a latent, non-human-readable
+representation. Results describing ``reasoning-stage'' behavior describe this proxy, not
+a literal decoding of GR00T's internals.
+
+\textbf{Forward-kinematics approximation.} GR00T's \texttt{REAL\_G1} embodiment expects
+wrist end-effector pose (\texttt{wrist\_eef\_9d}) state/action fields that no public G1
+dataset, including this one, records directly. We compute these via forward kinematics
+from the official Unitree G1 URDF. This is an approximation not independently verified
+against NVIDIA's internal training convention for this field; any bias in that convention
+should largely cancel out of the \emph{relative} predicted-vs-actual comparisons this
+rubric performs (both sides are computed the same way), but this has not been
+independently confirmed.
+
+\textbf{LLM-as-judge noise.} The reasoning-stage judge showed some inconsistency across
+calls in borderline cases -- e.g., an unspecified color descriptor (``teal plate'') was
+judged harmless elaboration in one episode and flagged as hallucination in others. This
+is a known limitation of LLM-as-judge approaches generally rather than specific to this
+pipeline, and a source of noise in the reasoning-failure-category counts
+(Table~\ref{tab:reasoning}) specifically, though it does not affect the execution-stage
+numbers (computed deterministically from numeric thresholds). We manually re-verified all
+3 \texttt{compounding\_failure} episodes -- the cases most sensitive to judge reliability,
+since both stages must be independently correct for that label to be trustworthy --
+against the raw reasoning trace and execution numbers directly; all 3 held up as genuine
+double-failures rather than judge noise.
+
+\textbf{Single task, single object.} Results here are from one task type
+(\texttt{g1-pick-apple}). \textit{[TODO: update if additional task folders are added
+before submission.]} The dataset includes three other object types (pear, grapes,
+starfruit) under the same task structure; whether the phase-wise failure gradient and the
+discrete/continuous split generalize across object geometry is untested.
+
+\textbf{Sample size.} 50 episodes / 150 phase observations is a modest sample for a
+strong generalization claim; error bars and statistical testing \textit{[TODO if time
+permits]} would strengthen Tables~\ref{tab:overall}--\ref{tab:reasoning}'s claims, in the
+spirit of the statistical-rigor practices Kress-Gazit et al.~\cite{kressgazit2024empirical}
+argue robot learning evaluation should adopt more broadly.
+
+\textbf{Physical-consequence proxy layer (explicitly out of scope here).} A natural
+extension is a kinematic-plausibility layer estimating whether a flagged execution
+failure plausibly causes a physical consequence (e.g., a balance-relevant torso
+deviation, an unreachable target) -- applied on top of, not in place of, the
+match/failure classification above. We deliberately scoped this out of the current
+submission to prioritize evaluating at a larger episode count within the available time;
+it remains the most direct way to address the trajectory-matching-vs-task-success gap
+above and is future work.
+
+\section{Conclusion}
+
+\textit{[TODO: 1 paragraph restating the contribution and the headline empirical finding
+once final numbers are locked in.]}
+
+\bibliographystyle{IEEEtran}
+\bibliography{references}
+
+\end{document}

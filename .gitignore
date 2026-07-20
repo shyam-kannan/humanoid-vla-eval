@@ -60,3 +60,10 @@ Thumbs.db
 
 # Colab
 .colab/
+
+# LaTeX build artifacts (tectonic cleans most of these up automatically)
+paper/*.aux
+paper/*.bbl
+paper/*.blg
+paper/*.log
+paper/*.out
