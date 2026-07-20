@@ -119,3 +119,48 @@ the specific goal of making a disagreement disappear rather than because the che
 revealed the threshold was measuring the wrong thing. The whole point of this pipeline is
 an honest measurement of where reasoning-to-action intent gets lost -- a threshold tuned
 to produce a predetermined answer isn't a more accurate pipeline, it's a broken one.
+
+## Checked so far
+
+| Episode | Phase | Label | Driving group(s) | Visually confirmed? | Notes |
+|---|---|---|---|---|---|
+| 0 | transport | intent_lost_in_handoff | `waist` (joint 0, 16.87° vs 15° cutoff) | Inconclusive | Everything else in the group (both wrists, both hands, both arms) was match/minor_deviation. The waist/torso isn't in frame in this camera's crop (only hands + apple + plate are visible), so the one thing driving the verdict can't be visually confirmed or denied from video alone -- see the write-up in conversation history around 2026-07-20 for the full reasoning. Not a bug: `score_joint_group`'s "any single joint fails the group" rule is `docs/scoring_rubric.md` Section 4.3's own explicit design, and the phase-level "any group fails the phase" rule was a deliberate choice kept as-is (see "Aggregation rule" note below). |
+
+## Still to check / revisit
+
+Pick up here for the next spot-check pass -- aiming for the 5-10 phase sample size
+Step 5 recommends, mixed across labels:
+
+- [ ] **Episode 4, `reach`** (`intent_lost_in_handoff`, driven by `left_wrist_eef_9d`
+      position at 7.13cm / rotation 11.1°) -- good next candidate specifically *because*
+      wrist position is visible in this camera's framing (unlike episode 0's waist-driven
+      case), so this one can actually get a real visual confirm/deny rather than another
+      inconclusive result.
+- [ ] At least one phase classified `success`, to confirm the pipeline isn't just
+      over-eager to flag failures -- check that a `success` phase's video also looks
+      genuinely clean, not just "not obviously bad."
+- [ ] At least one `minor_deviation` phase, to see whether "close but not quite" verdicts
+      look like reasonable close calls by eye.
+- [ ] Any phase where `full_horizon_tier` and `execution_tier` (early-window) disagree
+      sharply -- e.g. early window is `match` but full horizon is `failure`. Useful for
+      sanity-checking that the horizon split (Section 4 of the rubric) is capturing a real
+      phenomenon (drift) and not hiding something that matters within the early window
+      too.
+- [ ] Once a few more phases are checked: revisit whether the `waist` joint ordering
+      assumption (joint 0 = `waist_yaw`, per the URDF) is actually right -- if a future
+      spot-check on a *visible* waist rotation confirms or contradicts a `waist`-driven
+      verdict, that's indirect evidence for or against trusting the joint-0-is-yaw
+      assumption on the episode-0 case above too.
+
+## Aggregation rule -- decided, not to be revisited per-outcome
+
+`score_execution_phase`'s "any active-side group failing fails the phase" rule was
+deliberately kept as-is after episode 0's transport case (2026-07-20), rather than
+loosened to something like "2 of N groups must fail." Reasoning: it's the direct,
+consistent extension of the rubric's own explicit within-group rule (any single joint
+fails the group -- Section 4.3), and changing it specifically because it produced an
+inconvenient result on one case examined during spot-checking would be exactly the kind
+of outcome-driven tuning this document argues against above. If this rule gets revisited
+later, it should be for a reason independent of any specific phase's result -- e.g. a
+pattern across many spot-checked phases showing the strict rule is systematically
+miscalibrated, not a reaction to one case.
