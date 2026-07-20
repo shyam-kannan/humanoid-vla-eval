@@ -17,13 +17,16 @@ classification, isolating the specific failure mode of **intent lost in handoff*
 correct plan whose execution diverges from the demonstrated trajectory. Applied to GR00T
 N1.7 (zero-shot on a real Unitree G1 teleop dataset) with Cosmos-Reason2-2B as a
 reasoning-stage proxy, across 50 pick-and-place episodes (150 sub-goal-phase
-observations) we find [TODO: headline number, e.g. "68% of phase observations show
-intent lost in handoff"], with failure concentrated in continuous joint control (arm,
-wrist, torso) rather than discrete grasp-state prediction, and increasing through the
-task from initial reach to final retreat. We discuss the methodological limits of
-trajectory-matching against a single demonstration as a proxy for task success, and
-release the scoring pipeline as an open, auditable tool for pre-deployment diagnosis of
-VLA planning-execution failures.
+observations) we find that 68.0% of phase observations show intent lost in handoff (a
+correct plan whose execution diverges from the demonstrated trajectory) versus only 3.3%
+where both stages fail together, with failure concentrated in continuous joint control
+(arm, wrist, or torso deviates from the tightest tolerance in 100% of observations)
+rather than discrete grasp-state prediction (deviates in only 18.7%), and rising
+monotonically through the task
+from 58.0% at the initial reach to 74.0% by the final retreat. We discuss the
+methodological limits of trajectory-matching against a single demonstration as a proxy
+for task success, and release the scoring pipeline as an open, auditable tool for
+pre-deployment diagnosis of VLA planning-execution failures.
 
 ## I. Introduction
 
@@ -57,7 +60,8 @@ We contribute:
    humanoid VLA policy) evaluated zero-shot against real Unitree G1 teleoperated
    demonstrations, using Cosmos-Reason2-2B as an explicit, labeled proxy for the
    reasoning stage GR00T does not expose in human-readable form.
-3. An empirical failure taxonomy across [TODO: N] episodes showing that execution
+3. An empirical failure taxonomy across 50 episodes (150 sub-goal-phase observations)
+   showing that execution
    failures concentrate in continuous joint-space control rather than discrete
    grasp-state prediction, and that failure rate increases through the course of a
    pick-and-place task rather than being uniform.
@@ -217,11 +221,38 @@ higher-level object-interaction state tracking.
 The dominant failure pattern is a correct plan with a failed execution
 (`intent_lost_in_handoff`, 68% of observations), not a failure of both stages together
 (`compounding_failure`, 3.3%) -- consistent with the reasoning stage (or its proxy) being
-comparatively reliable relative to execution-stage trajectory fidelity in this setting.
+comparatively reliable relative to execution-stage trajectory fidelity in this setting. We
+manually verified all 3 `compounding_failure` episodes against their raw reasoning
+traces and execution numbers (Section [TODO: cross-ref] / `docs/manual_spot_check.md`):
+in two, the plan never described a retreat/withdraw step at all; in the third, the plan
+described the *plate* moving to meet the apple rather than the reverse -- a clear
+reversal of actor and object, not a borderline judge call.
 
-[TODO: figures -- bar chart of Table 1, stacked bar of Table 2 by phase, example frame
-sequence for a representative intent-lost-in-handoff case with predicted-vs-actual
-overlay if time permits]
+**Table 5 -- how many of the 5 scored dimensions land in the strictest tier
+simultaneously, per phase** (arm, hand, wrist position, wrist rotation, waist)
+
+| Dimensions matching | Count | % |
+|---|---|---|
+| 0 of 5 | 23 | 15.3% |
+| 1 of 5 | 75 | 50.0% |
+| 2 of 5 | 48 | 32.0% |
+| 3 of 5 | 3 | 2.0% |
+| 4 of 5 | 1 | 0.7% |
+| 5 of 5 | 0 | 0.0% |
+
+No phase in our sample achieves the strictest tier on all 5 dimensions simultaneously,
+which explains the 0% strict-success rate in Table 1 -- but the shape of this
+distribution is itself informative. If a single overly strict threshold were responsible
+(e.g., the torso-rotation tolerance being unreasonably tight relative to what a
+well-performing model could achieve), we would expect phases to cluster near 4/5, with
+one holdout dimension. Instead the distribution is centered at 1-2/5 (82% of phases), with
+only 4 of 150 phases (2.7%) reaching 3 or more. This is consistent with genuinely
+independent, non-trivial deviation across multiple continuous-control dimensions at once,
+not an artifact of one miscalibrated cutoff.
+
+[TODO: figures -- bar chart of Table 1, stacked bar of Table 2 by phase, bar chart of
+Table 5, example frame sequence for a representative intent-lost-in-handoff case with
+predicted-vs-actual overlay if time permits]
 
 ## V. Discussion and Limitations
 
@@ -233,7 +264,11 @@ generally admits multiple valid solution paths; GR00T predicting a different-but
 grasp approach would be scored identically to a genuinely failed grasp under this rubric.
 The zero success rate we observe (Table 1) should be read as "GR00T's zero-shot
 predictions on this embodiment do not closely track this specific demonstrated
-trajectory," not as "GR00T fails to complete this task." Grounding this distinction --
+trajectory," not as "GR00T fails to complete this task." Table 5's distribution supports
+this being a real measurement of partial trajectory fidelity rather than a rubric
+artifact -- most phases achieve 1-2 of 5 dimensions within the strictest tolerance, not
+zero, and the shape of the distribution is inconsistent with one miscalibrated threshold
+being solely responsible. Grounding the trajectory-fidelity-vs-task-success distinction --
 ideally via the physical-consequence proxy layer described below -- is the most important
 piece of future work this result motivates.
 
@@ -256,7 +291,11 @@ harmless elaboration in one episode and flagged as hallucination in others. This
 known limitation of LLM-as-judge approaches generally rather than specific to this
 pipeline, and a source of noise in the reasoning-failure-category counts (Table 4)
 specifically, though it does not affect the execution-stage numbers (computed
-deterministically from numeric thresholds).
+deterministically from numeric thresholds). We manually re-verified all 3
+`compounding_failure` episodes -- the cases most sensitive to judge reliability, since
+both stages must be independently correct for that label to be trustworthy -- against the
+raw reasoning trace and execution numbers directly; all 3 held up as genuine double-
+failures rather than judge noise (`docs/manual_spot_check.md`).
 
 **Single task, single object.** Results here are from one task type
 (`g1-pick-apple`) [TODO: update if additional task folders are added before
