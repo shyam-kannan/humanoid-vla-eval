@@ -30,15 +30,18 @@ pre-deployment diagnosis of VLA planning-execution failures.
 
 ## I. Introduction
 
-[TODO: expand with citations] Vision-language-action models increasingly follow a
-two-stage architecture inspired by dual-process theories of cognition: a "System 2"
-component performs deliberate, language-mediated reasoning to decompose a task
-instruction into sub-goals, while a "System 1" component maps the current observation
-and sub-goal onto continuous low-level actions. This decomposition is attractive for
-interpretability and modularity, but it introduces a specific failure surface that
-single-stage, end-to-end policies do not have: the reasoning stage can produce a
-completely correct plan that the action stage nonetheless fails to execute faithfully.
-We call this failure mode **intent lost in handoff**.
+Vision-language-action models increasingly follow a two-stage architecture explicitly
+described by their own authors in dual-process terms: a "System 2" component performs
+deliberate, language-mediated reasoning to decompose a task instruction into sub-goals,
+while a "System 1" component maps the current observation and sub-goal onto continuous
+low-level actions. GR00T N1 [bjorck2025groot] and $\pi_0$ [black2024pi0] both adopt this
+framing independently, and Embodied Chain-of-Thought [zawalski2024ecot] shows that
+eliciting an inspectable intermediate reasoning trace, even in an otherwise single-stage
+policy, improves both performance and interpretability. This decomposition is attractive
+for modularity, but it introduces a specific failure surface that single-stage,
+end-to-end policies [kim2024openvla, brohan2023rt2] do not have by construction: the
+reasoning stage can produce a completely correct plan that the action stage nonetheless
+fails to execute faithfully. We call this failure mode **intent lost in handoff**.
 
 Existing evaluation practice for VLA models typically reports aggregate task success
 rate, which conflates planning failures with execution failures and gives no diagnostic
@@ -73,17 +76,63 @@ We contribute:
 
 ## II. Related Work
 
-[TODO -- needs real citations, this is placeholder scaffolding only]
+**VLA models and dual-system architectures.** GR00T N1 [bjorck2025groot], the model we
+evaluate, explicitly frames itself as a dual-system architecture: a vision-language
+module (its authors' "System 2") interpreting instructions and scene, coupled to a
+diffusion-transformer action module ("System 1") generating continuous motor commands.
+$\pi_0$ [black2024pi0] independently converges on the same framing, pairing a discrete-
+token planning stage with a flow-matching action stage. Not every VLA makes this split
+explicit: OpenVLA [kim2024openvla] and RT-2 [brohan2023rt2] are single-stage policies that
+map vision and language directly to action tokens without a separately inspectable
+planning representation. This distinction matters for our methodology, which requires a
+model (or a reasonable proxy for one) that produces an inspectable plan distinct from its
+low-level action output -- it is not directly applicable to single-stage VLAs without
+first eliciting an analogous reasoning trace some other way.
 
-- VLA models and dual-system architectures: GR00T [TODO cite], OpenVLA [TODO cite],
-  RT-2 [TODO cite], pi0 [TODO cite]. Note where each does/doesn't expose an inspectable
-  reasoning trace.
-- Chain-of-thought / explicit reasoning in embodied models: ECoT [TODO cite], Cosmos-
-  Reason [TODO cite].
-- Offline evaluation of robot policies against demonstration datasets: [TODO cite --
-  imitation learning evaluation literature, action-chunking policy evaluation].
-- Humanoid whole-body manipulation benchmarks: [TODO cite].
-- Failure taxonomies / error analysis for learned robot policies: [TODO cite].
+**Explicit reasoning and chain-of-thought in embodied models.** Embodied
+Chain-of-Thought (ECoT) [zawalski2024ecot] trains OpenVLA to produce an inspectable
+reasoning trace -- plans, sub-tasks, and grounded features like bounding boxes -- *before*
+its action head runs, improving both success rate and interpretability. Our approach is
+related but serves a different purpose: ECoT modifies training to make an otherwise
+single-stage model produce visible reasoning as part of improving that same model, while
+we evaluate an already-dual-system, already-trained model's plan-to-action fidelity
+without any additional training, using reasoning and action as independently scored
+diagnostic signals rather than as a joint training target. Cosmos-Reason1
+[azzolini2025cosmosreason1] -- the predecessor to Cosmos-Reason2-2B, which we use as our
+reasoning-stage proxy (Section III.B) -- is exactly the kind of standalone
+embodied-reasoning VLM this diagnostic approach depends on: a model that shares
+architectural lineage with GR00T's internal VLM but exposes natural-language
+chain-of-thought output that GR00T's own latent reasoning does not.
+
+**Failure analysis for robot policies.** RoboFAC [ye2025robofac] is the closest prior
+work in spirit: a large-scale, failure-centric framework (9,440 erroneous trajectories,
+78,623 QA pairs, simulation and real-world) that trains a dedicated model to diagnose and
+correct manipulation failures from trajectory data. It differs from our approach in two
+ways relevant to this paper's contribution: it categorizes failures without explicitly
+cross-referencing an independently-scored plan against independently-scored execution the
+way our 2x2 classification does, and it requires training a diagnostic model on a large
+labeled failure dataset, whereas our method is a lightweight, threshold-based offline
+rubric requiring no additional training data or model training, specifically designed to
+isolate the reasoning-to-action handoff as its own failure surface.
+
+**Evaluation methodology beyond success rate.** Kress-Gazit et al.
+[kressgazit2024empirical] argue that robot learning research over-relies on aggregate
+success rate reported with minimal experimental context, and propose richer practices:
+explicit conditions, multiple complementary metrics, statistical rigor, and qualitative
+failure description -- demonstrated through physical hardware trials. We share this
+motivation but differ in setting: we obtain much of this richer diagnostic signal
+entirely offline against existing demonstration data, directly addressing the cost and
+slowness of physical trial-and-error evaluation that motivates their call for better
+practices in the first place.
+
+**Humanoid whole-body benchmarks and datasets.** HumanoidBench [sferrazza2024humanoidbench]
+is a simulated benchmark spanning humanoid locomotion and manipulation tasks; Humanoid
+Everyday [zhao2025humanoideveryday] is a large real-world dataset for diverse humanoid
+manipulation. Both establish task and data infrastructure for humanoid learning broadly;
+neither proposes a reasoning-versus-execution diagnostic methodology, which is the
+specific gap this paper targets. Like Humanoid Everyday, we use real (not simulated)
+demonstration data, but apply it to a narrower diagnostic question -- where a specific
+model's plan-to-action fidelity breaks down -- rather than broad task or skill coverage.
 
 ## III. Method
 
@@ -98,17 +147,21 @@ action are 43-dimensional whole-body vectors (legs, waist, both arms, both hands
 
 ### III.B. Models
 
-**Action stage (System 1):** GR00T N1.7 (3B parameters), NVIDIA's whole-body humanoid VLA
-policy, loaded zero-shot with `EmbodimentTag.REAL_G1` -- a pretrain tag matched by
-construction to this dataset's embodiment, requiring no fine-tuning.
+**Action stage (System 1):** GR00T N1.7 (3B parameters), a later checkpoint of NVIDIA's
+GR00T N1 whole-body humanoid VLA policy [bjorck2025groot], loaded zero-shot with
+`EmbodimentTag.REAL_G1` -- a pretrain tag matched by construction to this dataset's
+embodiment, requiring no fine-tuning.
 
 **Reasoning stage (System 2) proxy:** GR00T's own internal reasoning representation is
 latent (hidden-state activations), not human-readable. We use Cosmos-Reason2-2B, a
 vision-language model sharing backbone lineage with GR00T's internal VLM but released
 standalone with natural-language chain-of-thought output, run independently on the same
-task instruction and initial frame. **This is an explicit proxy, not GR00T's literal
-internal state**, and all results involving the reasoning stage must be read with this
-caveat.
+task instruction and initial frame. Cosmos-Reason2 is the successor to Cosmos-Reason1
+[azzolini2025cosmosreason1] and, as of this writing, is documented via model card and
+code release rather than a dedicated paper; we cite the Reason1 paper for the underlying
+architecture and training approach the Reason2 line descends from. **This is an explicit
+proxy, not GR00T's literal internal state**, and all results involving the reasoning
+stage must be read with this caveat.
 
 ### III.C. Ground-truth sub-goal segmentation
 
@@ -305,7 +358,9 @@ discrete/continuous split generalize across object geometry is untested.
 
 **Sample size.** 50 episodes / 150 phase observations is a modest sample for a strong
 generalization claim; error bars and statistical testing [TODO if time permits] would
-strengthen Table 1-4's claims.
+strengthen Table 1-4's claims, in the spirit of the statistical-rigor practices
+Kress-Gazit et al. [kressgazit2024empirical] argue robot learning evaluation should adopt
+more broadly.
 
 **Physical-consequence proxy layer (explicitly out of scope here).** A natural extension
 is a kinematic-plausibility layer estimating whether a flagged execution failure
