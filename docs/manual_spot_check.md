@@ -122,35 +122,65 @@ to produce a predetermined answer isn't a more accurate pipeline, it's a broken 
 
 ## Checked so far
 
-| Episode | Phase | Label | Driving group(s) | Visually confirmed? | Notes |
-|---|---|---|---|---|---|
-| 0 | transport | intent_lost_in_handoff | `waist` (joint 0, 16.87° vs 15° cutoff) | Inconclusive | Everything else in the group (both wrists, both hands, both arms) was match/minor_deviation. The waist/torso isn't in frame in this camera's crop (only hands + apple + plate are visible), so the one thing driving the verdict can't be visually confirmed or denied from video alone -- see the write-up in conversation history around 2026-07-20 for the full reasoning. Not a bug: `score_joint_group`'s "any single joint fails the group" rule is `docs/scoring_rubric.md` Section 4.3's own explicit design, and the phase-level "any group fails the phase" rule was a deliberate choice kept as-is (see "Aggregation rule" note below). |
+**Pass 1 (2026-07-20, video-based, 15-episode run).** Episode 0's `transport` phase --
+see below, inconclusive (waist-driven, not in frame).
+
+**Pass 2 (2026-07-20, numeric-based against raw predicted/actual data, 50-episode run).**
+5 episodes / 15 phases, chosen for coverage: 2 "typical" episodes (0, 4) and all 3 of the
+`compounding_failure` cases with the most reasoning-judge scrutiny value (22, 26, 35),
+since those are where the reasoning judge and execution scorer both have to be right for
+the label to be trustworthy. Method: read the reasoning trace in full, recompute
+`score_execution_phase` directly from the raw `predicted_action`/`actual_action` arrays
+(not the pre-aggregated summary), and check whether the numbers driving each verdict are
+internally consistent (varying, physically plausible magnitudes -- not suspiciously
+identical or degenerate, which would suggest a pipeline bug rather than real model error).
+
+| Episode | Phase | Label | Driving group(s) | Assessment |
+|---|---|---|---|---|
+| 0 | transport | intent_lost_in_handoff | `waist` (joint 0, 16.87° vs 15° cutoff) | Inconclusive (video pass) -- torso not in frame, see note below |
+| 0 | reach | minor_deviation | arm, wrist position, waist all minor | Numbers internally consistent, no bug |
+| 0 | retreat | intent_lost_in_handoff | arm (31.7°), wrist pos (8.4cm), wrist rot (20.1°) all failure | Numbers internally consistent, no bug |
+| 4 | reach | intent_lost_in_handoff | wrist position (8.0cm, failure); arm/waist only minor | Numbers internally consistent, no bug |
+| 4 | transport | minor_deviation | arm, wrist position, waist all minor | Numbers internally consistent, no bug |
+| 4 | retreat | minor_deviation | arm, wrist pos, wrist rot, waist all minor | Numbers internally consistent, no bug |
+| 22 | reach | minor_deviation | arm, wrist position, waist all minor | Numbers internally consistent, no bug |
+| 22 | transport | compounding_failure | arm (24.7°), hand (failure), wrist pos (7.8cm) all failure | **Reasoning check: legitimate.** Plan never describes a retreat/withdraw step (ends at "release the apple onto the plate") -- genuine missing_sub_goal, not judge noise. Execution independently failure-tier. Double-failure confirmed real. |
+| 22 | retreat | intent_lost_in_handoff | arm (36.1°), wrist pos (12.5cm) failure | Numbers internally consistent, no bug |
+| 26 | reach | intent_lost_in_handoff | arm (33.8°), wrist pos (9.5cm) failure | Numbers internally consistent, no bug |
+| 26 | transport | compounding_failure | arm minor, hand (failure), wrist pos (10.5cm), wrist rot (23.6°), waist (16.2°) all failure | **Reasoning check: legitimate**, same pattern as episode 22 -- plan ends at "ensure the apple is stable and properly placed," no withdraw step described. Execution independently and severely failure-tier (4 of 5 groups failing, not just barely over threshold like episode 0). Double-failure confirmed real. |
+| 26 | retreat | intent_lost_in_handoff | arm, wrist pos, wrist rot all failure | Numbers internally consistent, no bug |
+| 35 | reach | minor_deviation | arm, wrist position, waist all minor | Numbers internally consistent, no bug |
+| 35 | transport | compounding_failure | arm minor, hand (failure), wrist pos (10.1cm), waist (18.4°) failure | **Reasoning check: legitimate, and the most striking finding of this pass.** The plan has the apple lifted by the *left* arm, then describes the **plate** moving to meet the apple ("align the plate with the apple's new location... lower the plate to receive the apple") instead of the apple moving to the plate -- a genuine object/actor reversal, not a borderline judge call. Separately (not currently scored, just observed): the plan's claimed grasping arm (left) doesn't match the ground-truth active hand (right) for this episode -- a real reasoning-stage handedness error on top of the object-reversal one. Execution independently failure-tier. Double-failure confirmed real. |
+| 35 | retreat | intent_lost_in_handoff | arm (24.8°), wrist pos (8.3cm), wrist rot (22.6°) failure | Numbers internally consistent, no bug |
+
+**Conclusion after 16 phases across 6 episodes: no new bugs found, and the 3
+`compounding_failure` cases specifically checked all hold up as genuine double-failures
+under scrutiny, not reasoning-judge noise.** The "teal plate" inconsistency noted
+earlier remains the one known source of reasoning-judge noise, and it did not affect any
+of the 3 compounding_failure cases checked here.
 
 ## Still to check / revisit
 
-Pick up here for the next spot-check pass -- aiming for the 5-10 phase sample size
-Step 5 recommends, mixed across labels:
-
-- [ ] **Episode 4, `reach`** (`intent_lost_in_handoff`, driven by `left_wrist_eef_9d`
-      position at 7.13cm / rotation 11.1°) -- good next candidate specifically *because*
-      wrist position is visible in this camera's framing (unlike episode 0's waist-driven
-      case), so this one can actually get a real visual confirm/deny rather than another
-      inconclusive result.
 - [ ] At least one phase classified `success`, to confirm the pipeline isn't just
       over-eager to flag failures -- check that a `success` phase's video also looks
-      genuinely clean, not just "not obviously bad."
-- [ ] At least one `minor_deviation` phase, to see whether "close but not quite" verdicts
-      look like reasonable close calls by eye.
+      genuinely clean, not just "not obviously bad." **Currently blocked: 0 of 150
+      phases in the 50-episode run landed as `success` -- see `docs/paper_draft.md`
+      Discussion for why this is expected given the strict aggregation rule, not
+      necessarily a pipeline problem, but it means this check can't be done until/unless
+      a `success` case exists in a future run.**
 - [ ] Any phase where `full_horizon_tier` and `execution_tier` (early-window) disagree
       sharply -- e.g. early window is `match` but full horizon is `failure`. Useful for
       sanity-checking that the horizon split (Section 4 of the rubric) is capturing a real
       phenomenon (drift) and not hiding something that matters within the early window
       too.
-- [ ] Once a few more phases are checked: revisit whether the `waist` joint ordering
-      assumption (joint 0 = `waist_yaw`, per the URDF) is actually right -- if a future
-      spot-check on a *visible* waist rotation confirms or contradicts a `waist`-driven
-      verdict, that's indirect evidence for or against trusting the joint-0-is-yaw
-      assumption on the episode-0 case above too.
+- [ ] Revisit whether the `waist` joint ordering assumption (joint 0 = `waist_yaw`, per
+      the URDF) is right -- still unconfirmed. Pass 2 was numeric, not visual, so it
+      didn't add evidence either way on this specific question; would need a video check
+      with the torso actually in frame (a different camera crop/task) to resolve.
+- [ ] Episode 0's `transport` phase (the original waist-driven, camera-inconclusive case)
+      remains formally unresolved -- not urgent given Pass 2 found no supporting evidence
+      of a pipeline bug elsewhere, but flagged here so it isn't forgotten if the
+      waist-joint-ordering question above ever gets resolved.
 
 ## Aggregation rule -- decided, not to be revisited per-outcome
 
