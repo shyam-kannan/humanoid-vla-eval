@@ -321,7 +321,15 @@ Retreat & 74.0\% & 18.0\% & 8.0\% \\
 
 Failure rate rises monotonically through the task: the model's execution is closest to
 the demonstrated trajectory immediately after the observation (reach), and diverges
-further as the task progresses through transport into retreat.
+further as the task progresses through transport into retreat (Fig.~\ref{fig:phase}).
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.85\linewidth]{figures/fig_phase_breakdown.pdf}
+\caption{Classification breakdown by sub-goal phase (Table~\ref{tab:byphase}). Failure
+concentrates and grows through the task, from reach to transport to retreat.}
+\label{fig:phase}
+\end{figure}
 
 Table~\ref{tab:driving} shows which measured dimension most often drives a
 failure/minor-deviation verdict (a phase can implicate more than one dimension).
@@ -403,10 +411,18 @@ Dimensions matching & Count & \% \\
 \end{tabular}
 \end{table}
 
-% [TODO Task 3: figures -- bar chart of Table~\ref{tab:overall}, stacked bar of
-% Table~\ref{tab:byphase} by phase, bar chart of Table~\ref{tab:matchcount}, example
-% frame sequence for a representative intent-lost-in-handoff case with
-% predicted-vs-actual overlay if time permits]
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.85\linewidth]{figures/fig_match_distribution.pdf}
+\caption{How many of the 5 scored dimensions land in the strictest match tier
+simultaneously, per phase (Table~\ref{tab:matchcount}). The distribution centers at
+1--2/5 rather than clustering near 4/5, evidence against a single miscalibrated
+threshold being responsible for the 0\% strict-success rate.}
+\label{fig:matchdist}
+\end{figure}
+
+% [TODO if time permits: example frame sequence for a representative
+% intent-lost-in-handoff case with predicted-vs-actual overlay]
 
 \section{Discussion and Limitations}
 \label{sec:discussion}
@@ -420,9 +436,10 @@ different-but-valid grasp approach would be scored identically to a genuinely fa
 grasp under this rubric. The zero success rate we observe (Table~\ref{tab:overall})
 should be read as ``GR00T's zero-shot predictions on this embodiment do not closely track
 this specific demonstrated trajectory,'' not as ``GR00T fails to complete this task.''
-Table~\ref{tab:matchcount}'s distribution supports this being a real measurement of
-partial trajectory fidelity rather than a rubric artifact -- most phases achieve 1--2 of
-5 dimensions within the strictest tolerance, not zero, and the shape of the distribution
+Table~\ref{tab:matchcount} and Fig.~\ref{fig:matchdist}'s distribution supports this
+being a real measurement of partial trajectory fidelity rather than a rubric artifact --
+most phases achieve 1--2 of 5 dimensions within the strictest tolerance, not zero, and the
+shape of the distribution
 is inconsistent with one miscalibrated threshold being solely responsible. Grounding the
 trajectory-fidelity-vs-task-success distinction -- ideally via the physical-consequence
 proxy layer described below -- is the most important piece of future work this result
